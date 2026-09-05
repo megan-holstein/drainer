@@ -288,6 +288,48 @@ function waitForPrMerged (repo, branch, tries = 6, gapMs = 2500) {
   return false
 }
 
+// A PULL REQUEST STACKED ON THE BRANCH BEING LANDED IS CLOSED BY THE DELETION
+// BELOW, AND CANNOT BE REOPENED. Work arrives in chains — each branch cut from
+// the one before it, each PR based on its predecessor rather than on `main` —
+// and GitHub closes a pull request the moment its BASE branch disappears.
+// `gh pr reopen` answers "Could not open the pull request"; `gh pr edit --base`
+// answers "Cannot change the base branch of a closed pull request". So the
+// roster records live work as abandoned, and the only repair is opening a
+// replacement PR by hand, which is what happened to #91 on 2026-09-05 when
+// `templates-rename` landed underneath it.
+//
+// The fix is to move those PRs onto `main` first. It runs after the merge is
+// pushed, so a retargeted PR's diff is the stack minus what just landed, and
+// before the remote branch is deleted, which is the act that would close them.
+//
+// A failure here is REPORTED AND NOT FATAL. The branch is already on `main`; a
+// missed retarget is a defect in the roster rather than in the code, and
+// stopping the cleanup over one would leave a worktree and two branch refs
+// behind to fix the smaller of the two problems.
+function retargetStackedPrs (repo, branch) {
+  if (!repo.githubRepo) return
+  const r = spawnSync('gh', ['pr', 'list', '-R', repo.githubRepo, '--base', branch,
+                             '--state', 'open', '--json', 'number,headRefName'],
+                      { encoding: 'utf8' })
+  if (r.status !== 0) {
+    console.log(red(`  COULD NOT LIST THE PULL REQUESTS BASED ON ${branch}: ${(r.stderr || '').trim() || '(no stderr)'}`))
+    console.log(red('  Any PR stacked on it will close as abandoned when the branch goes.'))
+    return
+  }
+  let prs = []
+  try { prs = JSON.parse(r.stdout || '[]') } catch { prs = [] }
+  for (const pr of prs) {
+    const e = spawnSync('gh', ['pr', 'edit', String(pr.number), '-R', repo.githubRepo,
+                               '--base', repo.mainBranch], { encoding: 'utf8' })
+    if (e.status === 0) {
+      console.log(dim(`  pr #${pr.number} (${pr.headRefName}) retargeted from ${branch} onto ${repo.mainBranch}`))
+    } else {
+      console.log(red(`  RETARGETING PR #${pr.number} (${pr.headRefName}) ONTO ${repo.mainBranch} FAILED: ${(e.stderr || '').trim() || '(no stderr)'}`))
+      console.log(red(`  It is based on ${branch} and will close as abandoned when that branch goes.`))
+    }
+  }
+}
+
 function reportPrState (repo, branch) {
   if (!repo.githubRepo) return 'no github repo configured'
   const pr = prFor(repo, branch, ['--state', 'all'])
@@ -1092,6 +1134,10 @@ function cmdDrain (cfg, args, { resuming = false } = {}) {
         }
       }
       step('local branch deleted', del, `local branch \`${entry.branch}\` still exists`)
+      // MOVE ANY PULL REQUEST STACKED ON THIS BRANCH ONTO main BEFORE THE
+      // REMOTE BRANCH GOES — deleting a PR's base branch closes it permanently.
+      // See retargetStackedPrs for the whole argument. It never fails a landing.
+      retargetStackedPrs(repo, entry.branch)
       // DELETING THE REMOTE BRANCH IS WHAT CLOSES THE PULL REQUEST, SO CONFIRM
       // IT WILL CLOSE AS *MERGED* BEFORE DOING IT.
       //

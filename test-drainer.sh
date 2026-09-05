@@ -641,6 +641,83 @@ $DRAINER drain t >/dev/null 2>&1
 check "a drain over a deploying tip adds nothing" '[[ "$(git rev-parse main)" == "$tip_after" ]]'
 
 echo
+echo "── 25. a PR stacked on the landing branch is retargeted, not closed ─"
+# Work arrives in chains: each branch cut from the one before it, each PR based
+# on its predecessor. GitHub closes a pull request the instant its BASE branch
+# is deleted, and nothing reopens or retargets it afterwards — which is how #91
+# was lost on 2026-09-05 when `templates-rename` landed underneath it. So every
+# open PR based on the landing branch moves onto main BEFORE the remote branch
+# goes.
+#
+# `gh` is STUBBED on PATH rather than called: this suite must never reach
+# GitHub. The stub answers a --head query (the merged-state poll) with MERGED so
+# the deletion proceeds, answers a --base query with one stacked PR, and logs
+# every invocation so the retarget can be asserted as an argv rather than as a
+# printed sentence.
+mkdir -p "$ROOT/bin"
+export GH_STUB_LOG="$ROOT/gh-calls.log"
+cat > "$ROOT/bin/gh" <<'STUB'
+#!/bin/bash
+echo "$*" >> "$GH_STUB_LOG"
+head=""; base=""; prev=""
+for a in "$@"; do
+  case "$prev" in --head) head="$a" ;; --base) base="$a" ;; esac
+  prev="$a"
+done
+if [[ "$1 $2" == "pr list" ]]; then
+  if [[ -n "$head" ]]; then echo '[{"number":90,"state":"MERGED","isDraft":false}]'
+  elif [[ -n "$base" ]]; then echo '[{"number":91,"headRefName":"stacked-on-it"}]'
+  else echo '[]'; fi
+  exit 0
+fi
+[[ "$1 $2" == "pr edit" ]] && exit 0
+exit 1
+STUB
+chmod +x "$ROOT/bin/gh"
+export PATH="$ROOT/bin:$PATH"
+cat > "$ROOT/repos.json" <<JSON
+{ "repos": { "t": {
+  "checkout": "$ROOT/repo",
+  "mainBranch": "main",
+  "githubRepo": "acme/thing",
+  "gate": ["test -f base.txt"],
+  "finalCheck": "true",
+  "protectedPaths": ["harness/"]
+} } }
+JSON
+mk_branch based-on based-on.txt "based on"
+cd "$ROOT/repo-based-on" && $DRAINER handoff >/dev/null 2>&1
+$DRAINER admit --all >/dev/null 2>&1
+: > "$GH_STUB_LOG"
+out=$($DRAINER drain t 2>&1)
+cd "$ROOT/repo"
+check "the branch still lands"          '[[ -f "$ROOT/repo/based-on.txt" ]]'
+check "the stacked PR is retargeted"    '[[ "$out" == *"pr #91 (stacked-on-it) retargeted from based-on onto main"* ]]'
+check "…by a real gh pr edit --base"    '[[ "$(grep -c -- "pr edit 91 -R acme/thing --base main" "$GH_STUB_LOG")" == 1 ]]'
+# THE ORDER IS THE WHOLE POINT. Retargeting after the delete retargets nothing:
+# the PR is already closed and closed is permanent.
+check "the retarget PRECEDES the delete" '[[ "${out%%remote branch deleted*}" == *"retargeted"* ]]'
+check "the remote branch went"           '! git -C "$ROOT/origin.git" rev-parse --verify -q refs/heads/based-on >/dev/null'
+# A FAILURE TO RETARGET IS A ROSTER DEFECT, NOT A CODE DEFECT: it is said in red
+# and the landing carries on, worktree and refs cleaned up as usual.
+cat > "$ROOT/bin/gh" <<'STUB'
+#!/bin/bash
+head=""; for a in "$@"; do [[ "$prev" == "--head" ]] && head="$a"; prev="$a"; done
+if [[ "$1 $2" == "pr list" && -n "$head" ]]; then echo '[{"number":92,"state":"MERGED","isDraft":false}]'; exit 0; fi
+[[ "$1 $2" == "pr list" ]] && { echo "gh: could not query" >&2; exit 1; }
+exit 1
+STUB
+mk_branch based-on-two based-on-two.txt "two"
+cd "$ROOT/repo-based-on-two" && $DRAINER handoff >/dev/null 2>&1
+$DRAINER admit --all >/dev/null 2>&1
+out=$($DRAINER drain t 2>&1)
+cd "$ROOT/repo"
+check "a failed retarget says so"        '[[ "$out" == *"COULD NOT LIST THE PULL REQUESTS BASED ON based-on-two"* ]]'
+check "…and lands the branch anyway"     '[[ -f "$ROOT/repo/based-on-two.txt" ]]'
+check "…and still cleans the worktree"   '[[ ! -d "$ROOT/repo-based-on-two" ]]'
+rm -f "$ROOT/bin/gh"
+
+echo
 echo "════════════════════════════════════════════════════════════════"
 echo "  passed $PASS   failed $FAIL"
 echo "  sandbox left at $ROOT"

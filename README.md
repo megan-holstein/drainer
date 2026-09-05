@@ -476,6 +476,21 @@ cleanup. So the drainer polls briefly, deletes only on MERGED, and otherwise kee
 branch, says why in red, and prints the one command that finishes the job. It skips all of
 that where a repo configures no `githubRepo`.
 
+**A pull request stacked on the landing branch is moved onto `main` first** (2026-09-05).
+Work arrives in chains — each branch cut from the one before it, each PR based on its
+predecessor rather than on `main` — and GitHub closes a pull request the moment its *base*
+branch is deleted. That close is permanent in both directions: `gh pr reopen` answers
+"Could not open the pull request" and `gh pr edit --base` answers "Cannot change the base
+branch of a closed pull request", so a live branch ends up recorded as abandoned in the one
+list that is the record, and the only repair is opening a replacement PR by hand. That is
+what happened to #91 when `templates-rename` landed underneath it. So between the merge and
+the deletion the drainer asks `gh pr list --base <branch> --state open` and retargets each
+answer onto `main`, naming every one it moves. The placement is the point: after the merge
+is pushed, so a retargeted PR's diff is the stack minus what just landed, and before the
+branch goes, which is the act that would have closed it. **A retarget that fails never
+stops a landing** — it is said in red, and the merge, the worktree removal and both branch
+deletions carry on, a missed retarget being a defect in the roster rather than in the code.
+
 **The merge is done either way.** Cleanup residue is untidiness rather than a reason to
 stall the line, and the branch is on `main` and pushed before any of this runs.
 
@@ -570,7 +585,11 @@ behaving byte-identically, a three-branch drain marking all but the last, a sing
 drain marking nothing, a stall on the final entry leaving `main` undeployed until `resume`
 lands it, the trailing entry dropped *during* the gate ahead of it, and the trailing entry
 dropped after a stall, where the next drain republishes the tip with an empty commit
-carrying no marker. 120 assertions. Run it before changing anything.
+carrying no marker. Then the stacked-PR retarget, against a `gh` stubbed on `PATH` so that
+nothing here reaches GitHub: the PR moved onto `main` by a real `gh pr edit --base` argv,
+that call landing *before* the branch deletion rather than after it, and a `gh` that refuses
+the query leaving the branch landed and the worktree cleaned up regardless. 133 assertions.
+Run it before changing anything.
 
 ```sh
 bash test-drainer.sh
