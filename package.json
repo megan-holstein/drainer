@@ -1,0 +1,39 @@
+{
+  "name": "drainer",
+  "version": "0.1.0",
+  "description": "A local merge queue for git branches: hand off, admit, then land each one rebased onto current main, gated, merged --no-ff, pushed, and cleaned up.",
+  "type": "module",
+  "bin": {
+    "drainer": "./drainer.mjs"
+  },
+  "license": "MIT",
+  "author": "Megan Holstein",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/megan-holstein/drainer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/megan-holstein/drainer/issues"
+  },
+  "homepage": "https://github.com/megan-holstein/drainer#readme",
+  "keywords": [
+    "git",
+    "merge-queue",
+    "worktree",
+    "rebase",
+    "cli"
+  ],
+  "files": [
+    "drainer.mjs",
+    "test-drainer.sh",
+    "repos.example.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "bash test-drainer.sh"
+  }
+}
